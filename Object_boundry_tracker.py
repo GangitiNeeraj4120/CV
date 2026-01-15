@@ -24,11 +24,11 @@ while True:
 
     edge = cv2.Canny(fg_mask, 50, 50)
 
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
 
     dilated = cv2.dilate(edge, kernel, iterations=2)
     closed = cv2.morphologyEx(edge, cv2.MORPH_CLOSE, kernel, iterations=2)
-    processed = cv2.erode(closed, kernel, iterations=1)
+    processed = cv2.erode(closed, kernel, iterations=2)
 
     contours, _ = cv2.findContours(
         closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
@@ -53,7 +53,7 @@ while True:
         cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
 
         hull = cv2.convexHull(merged_cnt)
-        cv2.drawContours(frame, [hull], -1, (255, 0, 0), 2)
+        cv2.drawContours(frame, [hull], -1, (0, 255, 0), 2)
 
         M = cv2.moments(merged_cnt)
         if M["m00"] != 0:

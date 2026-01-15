@@ -6,27 +6,31 @@ import time
 
 py.FAILSAFE = True
 MOVE_SPEED = 25
-GAZE_HOLD_TIME = 3.0
+GAZE_HOLD_TIME = 4.0
 
 LEFT_THRESHOLD = 0.35
 RIGHT_THRESHOLD = 0.65
 UP_THRESHOLD = 0.25
-DOWN_THRESHOLD = 0.75
-VERTICAL_CENTER = 0.55
-VERTICAL_DEADZONE = 0.12
-DOWN_EAR_THRESHOLD = 0.22
-
 
 EAR_BLINK_THRESH = 0.18
+BLINK_MAX_DURATION = 0.25
+BLINK_GROUP_TIME = 0.8
 
-screen_w, screen_h = py.size()
+EAR_THRESH = 0.20
+BLINK_MAX_TIME = 0.25
+BLINK_WINDOW = 0.9
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
 
 cap = cv2.VideoCapture(0)
 
+ear_low_start = None
 blink_counter = 0
+last_blink_time = 0
+ear_closed_time = None
+eye_closed = False
+
 blink_start_time = 0
 lasr_action_time = time.time()
 gaze_hold_start = None
@@ -43,25 +47,17 @@ def get_gaze_ratio(eye_points, iris_points):
     iris_x = iris_points[0]
     return (iris_x - eye_left_x) / (eye_right_x - eye_left_x) #Gaze_ratio = iris distance from left/ eye width
 
-def get_vertical_ratio(eye_pts, iris):
-    top_y = eye_pts[1][1]
-    bottom_y = eye_pts[4][1]
-    iris_y = iris[1]
-    ratio = (iris_y - top_y)/(bottom_y - top_y)
-    return 1.0 - ratio
-
-vertical_center = None
-
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
     frame = cv2.flip(frame, 1) #mirror imaging
-    h, w, _ = frame.shape
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #Converts to RGB cuz Mediapipe trained on RGB images
 
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #Converts to RGB cuz Mediapipe trained on RGB images
     results = face_mesh.process(rgb)
+
+    h, w, _ = frame.shape
 
     if results.multi_face_landmarks is not None:
         landmarks = results.multi_face_landmarks[0].landmark
@@ -80,20 +76,20 @@ while True:
         iris_x = int(left_iris.x*w)
         iris_y = int(left_iris.y*h)
 
+        for (x, y) in left_eye_pts:
+            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+
+        for (x, y) in right_eye_pts:
+            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+
+        cv2.circle(frame, (iris_x, iris_y), 3, (0, 0, 255), -1)
+
         #Gaze movemont
         gaze_ratio = get_gaze_ratio(left_eye_pts, (iris_x, iris_y))
-        vertical_ratio = get_vertical_ratio(left_eye_pts, (iris_x, iris_y))
 
-        #Blink Detection
-        left_ear = eye_aspect_ratio(left_eye_pts)
-        right_ear = eye_aspect_ratio(right_eye_pts)
-        ear = (left_ear+right_ear)/2
+        ear = (eye_aspect_ratio(left_eye_pts)+eye_aspect_ratio(right_eye_pts))/2
 
-        print(f"EAR={ear:.2f} | vertical_ratio={vertical_ratio:.2f}")
-
-        if vertical_center is None:
-            vertical_center = vertical_ratio
-            print("caliberated vertical center:", vertical_center)
+        current_time = time.time()
 
         moved = False
 
@@ -104,16 +100,15 @@ while True:
             py.moveRel(MOVE_SPEED, 0)
             moved = True
         else:
-            vertical_center = 0.5
+            top_y = left_eye_pts[1][1]
+            bottom_y = left_eye_pts[4][1]
+            iris_pos = (iris_y - top_y)/(bottom_y - top_y)
 
-            if ear < DOWN_EAR_THRESHOLD and ear > EAR_BLINK_THRESH:
-                py.moveRel(0, MOVE_SPEED)
-                moved = True
-            elif vertical_ratio > VERTICAL_CENTER + 0.18:
+            if iris_pos < UP_THRESHOLD:
                 py.moveRel(0, -MOVE_SPEED)
                 moved = True
-            else:
-                pass
+            print(f"iris_pos: {iris_pos:.2f}")
+
 
         #Center Gaze
         if not moved:
@@ -126,20 +121,33 @@ while True:
             gaze_hold_start = None
 
 
-        if ear < EAR_BLINK_THRESH and not moved:
-            if blink_counter == 0:
-                blink_start_time = time.time() 
-            blink_counter += 1
+        if ear < EAR_THRESH:
+            if ear_closed_time is None:
+                ear_closed_time = current_time
         else:
-            blink_duration = time.time() - blink_start_time
+            if ear_closed_time is not None:
+                duration = current_time - ear_closed_time
 
-            if blink_counter >= 2 and blink_counter> 4:
-                py.click()
-            elif blink_counter >= 4:
-                py.rightClick()
+                if duration <= BLINK_MAX_TIME:
+                    if current_time - last_blink_time <= BLINK_WINDOW:
+                        blink_counter += 1
+                    else:
+                        blink_counter = 1
 
+                    last_blink_time = current_time
+
+                ear_closed_time = None
+
+        if blink_counter == 2:
+            py.click()
+            print("Left Click")
+            blink_counter = 0
+        elif blink_counter == 3:
+            py.rightClick()
+            print("Right Click")
             blink_counter = 0
 
+        cv2.putText(frame, f"EAR: {ear:.2f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
     cv2.imshow("Gaze Controlled Mouse", frame)
 
